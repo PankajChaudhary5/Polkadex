@@ -38,7 +38,9 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::unused_unit)]
 
+use codec::Codec;
 use codec::{Decode, Encode};
+use frame_support::pallet_prelude::Weight;
 use frame_support::{
     decl_error, decl_event, decl_module, decl_storage,
     dispatch::DispatchResult,
@@ -50,25 +52,23 @@ use frame_system as system;
 use frame_system::ensure_signed;
 use orml_traits::{MultiCurrency, MultiCurrencyExtended};
 use polkadex_primitives::assets::AssetId;
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaChaRng;
+use sp_core::H256;
 use sp_runtime::traits::AccountIdConversion;
 use sp_runtime::traits::CheckedDiv;
 use sp_runtime::traits::Saturating;
 use sp_runtime::traits::Zero;
 use sp_runtime::SaturatedConversion;
-use sp_std::prelude::*;
-use frame_support::pallet_prelude::Weight;
 use sp_std::collections::btree_map::BTreeMap;
 use sp_std::collections::btree_set::BTreeSet;
-use rand::{Rng, SeedableRng};
-use rand_chacha::ChaChaRng;
-use sp_core::H256;
-use codec::Codec;
+use sp_std::prelude::*;
 #[cfg(feature = "runtime-benchmarks")]
 mod benchmarking;
 pub mod weights;
 
-pub use weights::WeightInfo;
 use pallet_polkadex_ido_primitives::FundingRoundWithPrimitives;
+pub use weights::WeightInfo;
 
 #[cfg(test)]
 mod mock;
@@ -81,14 +81,14 @@ pub trait Config: system::Config + orml_tokens::Config {
     /// The overarching event type.
     type Event: From<Event<Self>> + Into<<Self as system::Config>::Event>;
     /// The origin which may attests the investor to take part in the IDO pallet.
-    type GovernanceOrigin: EnsureOrigin<Self::Origin, Success=Self::AccountId>;
+    type GovernanceOrigin: EnsureOrigin<Self::Origin, Success = Self::AccountId>;
     /// The treasury mechanism.
     type TreasuryAccountId: Get<Self::AccountId>;
     /// The currency mechanism.
     type Currency: MultiCurrencyExtended<
         Self::AccountId,
-        CurrencyId=AssetId,
-        Balance=Self::Balance,
+        CurrencyId = AssetId,
+        Balance = Self::Balance,
     >;
     /// The native currency ID type
     type NativeCurrencyId: Get<Self::CurrencyId>;
@@ -129,13 +129,11 @@ impl Default for InvestorInfo {
     }
 }
 
-
-
 /// All information for funding round
 #[derive(Encode, Decode, Clone, PartialEq, Eq, Debug)]
 pub struct FundingRound<T: Config> {
     token_a: AssetId,
-    creator : T::AccountId,
+    creator: T::AccountId,
     amount: T::Balance,
     token_b: AssetId,
     vesting_per_block: T::Balance,
@@ -152,7 +150,7 @@ impl<T: Config> Default for FundingRound<T> {
     fn default() -> Self {
         FundingRound {
             token_a: AssetId::POLKADEX,
-            creator:T::AccountId::default(),
+            creator: T::AccountId::default(),
             amount: T::Balance::default(),
             token_b: AssetId::POLKADEX,
             vesting_per_block: T::Balance::default(),
@@ -170,7 +168,7 @@ impl<T: Config> Default for FundingRound<T> {
 impl<T: Config> FundingRound<T> {
     fn from(
         token_a: AssetId,
-        creator : T::AccountId,
+        creator: T::AccountId,
         amount: T::Balance,
         token_b: AssetId,
         vesting_per_block: T::Balance,
@@ -210,7 +208,7 @@ impl<T: Config> FundingRound<T> {
             operator_commission: self.operator_commission.saturated_into(),
             token_a_priceper_token_b: self.token_a_priceper_token_b.saturated_into(),
             close_round_block: self.close_round_block.saturated_into(),
-            actual_raise: self.actual_raise.saturated_into()
+            actual_raise: self.actual_raise.saturated_into(),
         }
     }
 }
@@ -220,7 +218,6 @@ pub struct InterestedInvestorInfo<T: Config + frame_system::Config> {
     account_id: T::AccountId,
     amount: T::Balance,
 }
-
 
 decl_storage! {
     trait Store for Module<T: Config> as PolkadexIdo {
@@ -638,7 +635,7 @@ impl<T: Config> Module<T> {
 
     fn incr_nonce() -> u128 {
         let current_nonce: u128 = <Nonce>::get();
-        let (nonce,_) = current_nonce.overflowing_add(1);
+        let (nonce, _) = current_nonce.overflowing_add(1);
         <Nonce>::put(nonce);
         <Nonce>::get()
     }
@@ -647,24 +644,32 @@ impl<T: Config> Module<T> {
         T::ModuleId::get().into_account()
     }
 
-    pub fn rounds_by_investor(account : T::AccountId) -> Vec<(T::Hash, FundingRoundWithPrimitives<T::AccountId>)> {
-        <InvestorShareInfo<T>>::iter().filter_map(|(round_id, investor, _)| {
-            if investor != account {
-                None
-            }else{
-                let round_info = <InfoFundingRound<T>>::get(&round_id);
-                Some((round_id,round_info.to_primitive()))
-            }
-        }).collect()
+    pub fn rounds_by_investor(
+        account: T::AccountId,
+    ) -> Vec<(T::Hash, FundingRoundWithPrimitives<T::AccountId>)> {
+        <InvestorShareInfo<T>>::iter()
+            .filter_map(|(round_id, investor, _)| {
+                if investor != account {
+                    None
+                } else {
+                    let round_info = <InfoFundingRound<T>>::get(&round_id);
+                    Some((round_id, round_info.to_primitive()))
+                }
+            })
+            .collect()
     }
 
-    pub fn rounds_by_creator(account : T::AccountId) -> Vec<(T::Hash, FundingRoundWithPrimitives<T::AccountId>)> {
-        <InfoFundingRound<T>>::iter().filter_map(|(round_id, round_info)| {
-            if round_info.creator != account {
-                None
-            }else{
-                Some((round_id,round_info.to_primitive()))
-            }
-        }).collect()
+    pub fn rounds_by_creator(
+        account: T::AccountId,
+    ) -> Vec<(T::Hash, FundingRoundWithPrimitives<T::AccountId>)> {
+        <InfoFundingRound<T>>::iter()
+            .filter_map(|(round_id, round_info)| {
+                if round_info.creator != account {
+                    None
+                } else {
+                    Some((round_id, round_info.to_primitive()))
+                }
+            })
+            .collect()
     }
 }
